@@ -87,10 +87,33 @@ class TestDBSync(unittest.TestCase):
         config_with_external_stage['stage'] = 'dummy-value'
         self.assertGreater(len(validator(config_with_external_stage)), 0)
 
+        # Key-pair auth instead of a password
+        config_with_private_key = minimal_config.copy()
+        config_with_private_key.pop('password')
+        config_with_private_key['private_key'] = 'dummy-value'
+        self.assertEqual(len(validator(config_with_private_key)), 0)
+
+        # Neither password nor private_key - (nr_of_errors >= 0)
+        config_without_credentials = minimal_config.copy()
+        config_without_credentials.pop('password')
+        self.assertGreater(len(validator(config_without_credentials)), 0)
+
         # Configuration with archive_load_files but no s3_bucket
         config_with_archive_load_files = minimal_config.copy()
         config_with_archive_load_files['archive_load_files'] = True
         self.assertGreater(len(validator(config_with_external_stage)), 0)
+
+    def test_credentials(self):
+        """PEM private keys become DER bytes; passwords pass through"""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption()).decode()
+
+        der = db_sync.credentials({'private_key': pem})['private_key']
+        self.assertIsInstance(serialization.load_der_private_key(der, password=None), rsa.RSAPrivateKey)
+        self.assertEqual(db_sync.credentials({'password': 'p'}), {'password': 'p'})
 
     def test_column_type_mapping(self):
         """Test JSON type to Snowflake column type mappings"""
