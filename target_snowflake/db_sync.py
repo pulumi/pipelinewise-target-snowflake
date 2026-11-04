@@ -1,6 +1,7 @@
 import json
 import sys
 import snowflake.connector
+from cryptography.hazmat.primitives import serialization
 import re
 import time
 
@@ -22,7 +23,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         's3_bucket',
         'stage',
@@ -33,7 +33,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         'file_format'
     ]
@@ -56,6 +55,9 @@ def validate_config(config):
         if not config.get(k, None):
             errors.append(f"Required key is missing from config: [{k}]")
 
+    if not config.get('password') and not config.get('private_key'):
+        errors.append("One of 'password' or 'private_key' is required.")
+
     # Check target schema config
     config_default_target_schema = config.get('default_target_schema', None)
     config_schema_mapping = config.get('schema_mapping', None)
@@ -68,6 +70,22 @@ def validate_config(config):
         errors.append('Archive load files option can be used only with external s3 stages. Please define s3_bucket.')
 
     return errors
+
+
+def credentials(config):
+    """Key-pair auth when private_key (PEM) is set, password otherwise"""
+    if config.get('private_key'):
+        passphrase = config.get('private_key_passphrase')
+        key = serialization.load_pem_private_key(
+            config['private_key'].encode(),
+            password=passphrase.encode() if passphrase else None,
+        )
+        return {'private_key': key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )}
+    return {'password': config['password']}
 
 
 def column_type(schema_property):
@@ -293,7 +311,7 @@ class DbSync:
 
         return snowflake.connector.connect(
             user=self.connection_config['user'],
-            password=self.connection_config['password'],
+            **credentials(self.connection_config),
             account=self.connection_config['account'],
             database=self.connection_config['dbname'],
             warehouse=self.connection_config['warehouse'],
